@@ -1,0 +1,13 @@
+{
+  "domain": "opnsense",
+  "name": "OPNsense",
+  "codeowners": ["@itsjustdeepred"],
+  "config_flow": true,
+  "documentation": "https://github.com/itsjustdeepred/opnsense-hacs",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "loggers": ["pbr", "pyopnsense"],
+  "version": "1.0.0",
+  "requirements": ["pyopnsense==0.4.0"]
+}
+

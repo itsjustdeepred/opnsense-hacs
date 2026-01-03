@@ -1,0 +1,66 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "OPNsense is already configured",
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
+      "reconfigure_successful": "Settings updated successfully"
+    },
+    "error": {
+      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
+      "cannot_fetch_devices": "Unable to fetch devices from OPNsense",
+      "invalid_interface": "One or more selected interfaces are invalid",
+      "invalid_mac": "One or more selected MAC addresses are invalid",
+      "unknown": "[%key:common::config_flow::error::unknown%]"
+    },
+    "step": {
+      "user": {
+        "description": "Enter your OPNsense router connection details. You can find your API credentials in OPNsense under System → Access → Users → [Your User] → API tab.",
+        "data": {
+          "api_key": "API Key",
+          "api_secret": "API Secret",
+          "url": "OPNsense URL",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "api_key": "API key from your OPNsense router",
+          "api_secret": "API secret from your OPNsense router",
+          "url": "URL of your OPNsense instance (e.g., https://192.168.1.1 or just 192.168.1.1)",
+          "verify_ssl": "Enable to verify SSL certificates. Disable if using self-signed certificates."
+        }
+      },
+      "interfaces": {
+        "data": {
+          "tracker_interfaces": "Interfaces"
+        },
+        "description": "Select which network interfaces to monitor for device tracking. Only devices connected to selected interfaces will be tracked. Leave empty to track devices on all interfaces.",
+        "title": "Select interfaces"
+      },
+      "devices": {
+        "data": {
+          "tracker_mac_addresses": "Devices"
+        },
+        "description": "Select specific devices to track by their MAC address. {device_count} device(s) available based on selected interfaces. Leave empty to track all devices found on the selected interfaces.",
+        "title": "Select devices"
+      },
+      "reconfigure": {
+        "description": "Reconfigure OPNsense integration settings",
+        "title": "Reconfigure OPNsense"
+      },
+      "reconfigure_interfaces": {
+        "data": {
+          "tracker_interfaces": "Interfaces"
+        },
+        "description": "Select which network interfaces to monitor for device tracking. Only devices connected to selected interfaces will be tracked. Leave empty to track devices on all interfaces.",
+        "title": "Reconfigure interfaces"
+      },
+      "reconfigure_devices": {
+        "data": {
+          "tracker_mac_addresses": "Devices"
+        },
+        "description": "Select specific devices to track by their MAC address. {device_count} device(s) available based on selected interfaces. Leave empty to track all devices found on the selected interfaces.",
+        "title": "Reconfigure devices"
+      }
+    }
+  }
+}
+
