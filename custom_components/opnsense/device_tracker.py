@@ -175,10 +175,6 @@ async def async_setup_entry(
                     )
                 )
 
-        # Note: We don't remove entities when devices disconnect.
-        # Instead, they will be marked as offline via is_connected property.
-        # This preserves entity history and configuration.
-
         if new_entities:
             _LOGGER.debug("Adding %d new device tracker entities", len(new_entities))
             async_add_entities(new_entities)
