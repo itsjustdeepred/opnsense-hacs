@@ -175,15 +175,9 @@ async def async_setup_entry(
                     )
                 )
 
-        removed_entities = existing_entities_set - valid_macs
-        if removed_entities and not first_check:
-            for entity_entry in existing_entities_list:
-                if entity_entry.unique_id in removed_entities:
-                    _LOGGER.debug(
-                        "Removing entity %s (MAC no longer tracked)",
-                        entity_entry.entity_id,
-                    )
-                    entity_registry.async_remove(entity_entry.entity_id)
+        # Note: We don't remove entities when devices disconnect.
+        # Instead, they will be marked as offline via is_connected property.
+        # This preserves entity history and configuration.
 
         if new_entities:
             _LOGGER.debug("Adding %d new device tracker entities", len(new_entities))
