@@ -12,16 +12,15 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_API_KEY, CONF_URL, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
-    BooleanSelector,
 )
 
 from .const import (
@@ -82,16 +81,44 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
                 "title": f"OPNsense {test_url}",
                 "interfaces": dict(interfaces),
             }
-        except APIException as err:
-            last_error = err
-            continue
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             last_error = err
             continue
 
     if last_error:
         raise last_error
     raise APIException("Unable to connect to OPNsense")
+
+
+def _connection_schema(
+    default_url: str = "",
+    default_api_key: str = "",
+    default_verify_ssl: bool = False,
+) -> vol.Schema:
+    """Build the connection data schema with optional defaults."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_URL, default=default_url): TextSelector(
+                TextSelectorConfig(
+                    type=TextSelectorType.URL,
+                    autocomplete="url",
+                )
+            ),
+            vol.Required(CONF_API_KEY, default=default_api_key): TextSelector(
+                TextSelectorConfig(
+                    type=TextSelectorType.TEXT,
+                    autocomplete="username",
+                )
+            ),
+            vol.Required(CONF_API_SECRET): TextSelector(
+                TextSelectorConfig(
+                    type=TextSelectorType.PASSWORD,
+                    autocomplete="current-password",
+                )
+            ),
+            vol.Optional(CONF_VERIFY_SSL, default=default_verify_ssl): BooleanSelector(),
+        }
+    )
 
 
 class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -104,6 +131,8 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
         self._interfaces: dict[str, str] = {}
         self._devices: list[dict[str, Any]] = []
         self._interface_client: diagnostics.InterfaceClient | None = None
+        self._user_input: dict[str, Any] = {}
+        self._selected_interfaces: list[str] = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -141,33 +170,9 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
                 else:
                     return await self.async_step_interfaces()
 
-        data_schema = vol.Schema(
-            {
-                vol.Required(CONF_URL): TextSelector(
-                    TextSelectorConfig(
-                        type=TextSelectorType.URL,
-                        autocomplete="url",
-                    )
-                ),
-                vol.Required(CONF_API_KEY): TextSelector(
-                    TextSelectorConfig(
-                        type=TextSelectorType.TEXT,
-                        autocomplete="username",
-                    )
-                ),
-                vol.Required(CONF_API_SECRET): TextSelector(
-                    TextSelectorConfig(
-                        type=TextSelectorType.PASSWORD,
-                        autocomplete="current-password",
-                    )
-                ),
-                vol.Optional(CONF_VERIFY_SSL, default=False): BooleanSelector(),
-            }
-        )
-
         return self.async_show_form(
             step_id="user",
-            data_schema=data_schema,
+            data_schema=_connection_schema(),
             errors=errors,
             description_placeholders={},
         )
@@ -233,7 +238,6 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             selected_macs = user_input.get(CONF_TRACKER_MAC_ADDRESSES, [])
-            # Validate selected MAC addresses
             available_macs = {device["mac"] for device in self._devices}
             if selected_macs:
                 for mac in selected_macs:
@@ -251,9 +255,7 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_TRACKER_MAC_ADDRESSES: selected_macs,
                 }
 
-                await self.async_set_unique_id(
-                    f"{self._user_input[CONF_URL]}_{self._user_input[CONF_API_KEY]}"
-                )
+                await self.async_set_unique_id(self._user_input[CONF_URL])
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
@@ -285,9 +287,7 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_TRACKER_MAC_ADDRESSES: [],
             }
 
-            await self.async_set_unique_id(
-                f"{self._user_input[CONF_URL]}_{self._user_input[CONF_API_KEY]}"
-            )
+            await self.async_set_unique_id(self._user_input[CONF_URL])
             self._abort_if_unique_id_configured()
 
             return self.async_create_entry(
@@ -313,9 +313,6 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=data_schema,
             description_placeholders={
                 "device_count": str(len(device_options)),
-                "interface_count": str(len(self._selected_interfaces))
-                if self._selected_interfaces
-                else "all",
             },
             errors=errors,
         )
@@ -327,51 +324,45 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
         reconfigure_entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
 
-        # Load existing configuration
-        existing_url = reconfigure_entry.data[CONF_URL]
-        existing_api_key = reconfigure_entry.data[CONF_API_KEY]
-        existing_api_secret = reconfigure_entry.data[CONF_API_SECRET]
-        existing_verify_ssl = reconfigure_entry.data.get(CONF_VERIFY_SSL, False)
-        existing_interfaces = reconfigure_entry.data.get(CONF_TRACKER_INTERFACES, [])
-        existing_mac_addresses = reconfigure_entry.data.get(
-            CONF_TRACKER_MAC_ADDRESSES, []
+        if user_input is not None:
+            try:
+                info = await validate_input(self.hass, user_input)
+            except APIException as err:
+                _LOGGER.debug("API exception during reconfigure validation: %s", err)
+                errors["base"] = "cannot_connect"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unexpected exception during reconfigure")
+                errors["base"] = "unknown"
+            else:
+                self._interfaces = info["interfaces"]
+                working_url = user_input[CONF_URL]
+                self._interface_client = diagnostics.InterfaceClient(
+                    user_input[CONF_API_KEY],
+                    user_input[CONF_API_SECRET],
+                    working_url,
+                    user_input.get(CONF_VERIFY_SSL, False),
+                    timeout=20,
+                )
+                self._user_input = {**user_input, CONF_URL: working_url}
+                try:
+                    devices = await self.hass.async_add_executor_job(
+                        self._interface_client.get_arp
+                    )
+                    self._devices = devices
+                except APIException:
+                    errors["base"] = "cannot_fetch_devices"
+                else:
+                    return await self.async_step_reconfigure_interfaces()
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_connection_schema(
+                default_url=reconfigure_entry.data.get(CONF_URL, ""),
+                default_api_key=reconfigure_entry.data.get(CONF_API_KEY, ""),
+                default_verify_ssl=reconfigure_entry.data.get(CONF_VERIFY_SSL, False),
+            ),
+            errors=errors,
         )
-
-        # Initialize interface client with existing credentials
-        try:
-            interface_client = diagnostics.InterfaceClient(
-                existing_api_key,
-                existing_api_secret,
-                existing_url,
-                existing_verify_ssl,
-                timeout=20,
-            )
-            # Test connection and get interfaces
-            netinsight_client = diagnostics.NetworkInsightClient(
-                existing_api_key,
-                existing_api_secret,
-                existing_url,
-                existing_verify_ssl,
-                timeout=20,
-            )
-            interfaces = await self.hass.async_add_executor_job(
-                netinsight_client.get_interfaces
-            )
-            self._interfaces = dict(interfaces)
-
-            # Get devices
-            devices = await self.hass.async_add_executor_job(interface_client.get_arp)
-            self._devices = devices
-            self._interface_client = interface_client
-        except APIException:
-            errors["base"] = "cannot_connect"
-            return self.async_show_form(
-                step_id="reconfigure",
-                errors=errors,
-            )
-
-        # Start with interface selection
-        return await self.async_step_reconfigure_interfaces()
 
     async def async_step_reconfigure_interfaces(
         self, user_input: dict[str, Any] | None = None
@@ -443,34 +434,29 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             selected_macs = user_input.get(CONF_TRACKER_MAC_ADDRESSES, [])
             available_macs = {device["mac"] for device in self._devices}
-            invalid_macs = []
-            if selected_macs:
-                for mac in selected_macs:
-                    if mac not in available_macs:
-                        invalid_macs.append(mac)
+            invalid_macs = [mac for mac in selected_macs if mac not in available_macs]
 
             if invalid_macs:
-                valid_selected_macs = [
-                    mac for mac in selected_macs if mac in available_macs
-                ]
-                selected_macs = valid_selected_macs
+                selected_macs = [mac for mac in selected_macs if mac in available_macs]
                 _LOGGER.warning(
                     "Some selected MAC addresses are no longer available and were removed: %s",
                     ", ".join(invalid_macs),
                 )
 
-            data_updates = {
-                CONF_TRACKER_INTERFACES: self._selected_interfaces,
-                CONF_TRACKER_MAC_ADDRESSES: selected_macs,
-            }
-
             return self.async_update_reload_and_abort(
                 reconfigure_entry,
-                data_updates=data_updates,
+                data_updates={
+                    CONF_URL: self._user_input[CONF_URL],
+                    CONF_API_KEY: self._user_input[CONF_API_KEY],
+                    CONF_API_SECRET: self._user_input[CONF_API_SECRET],
+                    CONF_VERIFY_SSL: self._user_input.get(CONF_VERIFY_SSL, False),
+                    CONF_TRACKER_INTERFACES: self._selected_interfaces,
+                    CONF_TRACKER_MAC_ADDRESSES: selected_macs,
+                },
             )
 
-        device_options = {}
-        available_macs = set()
+        device_options: dict[str, str] = {}
+        available_macs: set[str] = set()
         for device in self._devices:
             mac = device["mac"]
             hostname = device.get("hostname") or "Unknown"
@@ -509,9 +495,6 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
             data_schema=data_schema,
             description_placeholders={
                 "device_count": str(len(device_options)),
-                "interface_count": str(len(self._selected_interfaces))
-                if self._selected_interfaces
-                else "all",
             },
             errors=errors,
         )

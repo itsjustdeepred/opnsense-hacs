@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, NewType
+from typing import Any, TypeAlias
 
 from pyopnsense import diagnostics
 
-from homeassistant.components.device_tracker import DeviceScanner, ScannerEntity
+from homeassistant.components.device_tracker import (
+    DeviceScanner,
+    ScannerEntity,
+    SourceType,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -27,8 +31,8 @@ from .const import (
 )
 from .coordinator import OPNsenseDataUpdateCoordinator
 
-DeviceDetails = NewType("DeviceDetails", dict[str, Any])
-DeviceDetailsByMAC = NewType("DeviceDetailsByMAC", dict[str, DeviceDetails])
+DeviceDetails: TypeAlias = dict[str, Any]
+DeviceDetailsByMAC: TypeAlias = dict[str, DeviceDetails]
 
 
 async def async_get_scanner(
@@ -56,17 +60,10 @@ async def async_setup_entry(
     tracker_mac_addresses = data[CONF_TRACKER_MAC_ADDRESSES]
 
     entity_registry = er.async_get(hass)
-    existing_entities_list = [
-        entity
-        for entity in er.async_entries_for_config_entry(entity_registry, entry.entry_id)
-        if entity.platform == DOMAIN
-    ]
-    existing_entities_set = {entity.unique_id for entity in existing_entities_list}
 
     entities = []
-    devices_in_data = {}
-    for device in coordinator.data:
-        mac = device["mac"]
+    devices_in_data: dict[str, DeviceDetails] = {}
+    for mac, device in coordinator.data.items():
         if (
             tracker_interfaces
             and device.get("intf_description") not in tracker_interfaces
@@ -96,69 +93,64 @@ async def async_setup_entry(
             )
         )
 
+    existing_entities_list = [
+        entity
+        for entity in er.async_entries_for_config_entry(entity_registry, entry.entry_id)
+        if entity.platform == DOMAIN
+    ]
     for entity_entry in existing_entities_list:
         if entity_entry.unique_id not in devices_in_data:
-            mac = entity_entry.unique_id.replace(":", "").upper()
-            mac_formatted = ":".join(
-                mac[i : i + 2] for i in range(0, len(mac), 2)
-            )
-            should_track = True
+            # unique_id is already in format_mac format (lowercase colon-separated)
+            mac_formatted = entity_entry.unique_id
             if tracker_mac_addresses and mac_formatted not in tracker_mac_addresses:
-                should_track = False
-            
-            if should_track:
-                device_data = {
-                    "mac": mac_formatted,
-                    "hostname": entity_entry.original_name or None,
-                    "ip": None,
-                    "intf_description": None,
-                    "manufacturer": None,
-                }
-                entities.append(
-                    OPNsenseTrackerEntity(
-                        coordinator, device_data, tracker_interfaces, tracker_mac_addresses
-                    )
+                continue
+            device_data: DeviceDetails = {
+                "mac": mac_formatted,
+                "hostname": entity_entry.original_name or None,
+                "ip": None,
+                "intf_description": None,
+                "manufacturer": None,
+            }
+            entities.append(
+                OPNsenseTrackerEntity(
+                    coordinator, device_data, tracker_interfaces, tracker_mac_addresses
                 )
+            )
 
     if entities:
         async_add_entities(entities)
 
-    first_check = True
-
     @callback
     def _async_check_devices() -> None:
-        """Check for new/removed devices and update entities."""
-        nonlocal first_check
-        new_entities = []
+        """Check for new devices and add tracker entities."""
         valid_macs = {
-            format_mac(device["mac"])
-            for device in coordinator.data
+            format_mac(mac)
+            for mac, device in coordinator.data.items()
             if (
                 not tracker_interfaces
                 or device.get("intf_description") in tracker_interfaces
             )
-            and (not tracker_mac_addresses or device["mac"] in tracker_mac_addresses)
+            and (not tracker_mac_addresses or mac in tracker_mac_addresses)
         }
 
-        entity_registry = er.async_get(hass)
-        existing_entities_list = [
-            entity
+        current_entity_registry = er.async_get(hass)
+        existing_unique_ids = {
+            entity.unique_id
             for entity in er.async_entries_for_config_entry(
-                entity_registry, entry.entry_id
+                current_entity_registry, entry.entry_id
             )
             if entity.platform == DOMAIN
-        ]
-        existing_entities_set = {entity.unique_id for entity in existing_entities_list}
+        }
 
-        new_macs = valid_macs - existing_entities_set
-        for device in coordinator.data:
-            mac = device["mac"]
+        new_macs = valid_macs - existing_unique_ids
+        new_entities = []
+        for mac, device in coordinator.data.items():
             unique_id = format_mac(mac)
             if unique_id in new_macs:
-                if deleted_entity_id := entity_registry.async_get_entity_id(
+                if deleted_entity_id := current_entity_registry.async_get_entity_id(
                     "device_tracker", DOMAIN, unique_id
                 ):
-                    entity_entry = entity_registry.async_get(deleted_entity_id)
+                    entity_entry = current_entity_registry.async_get(deleted_entity_id)
                     if entity_entry and (
                         entity_entry.config_entry_id != entry.entry_id
                         or entity_entry.disabled_by is not None
@@ -167,7 +159,7 @@ async def async_setup_entry(
                             "Removing orphaned entity %s before recreating",
                             deleted_entity_id,
                         )
-                        entity_registry.async_remove(deleted_entity_id)
+                        current_entity_registry.async_remove(deleted_entity_id)
 
                 new_entities.append(
                     OPNsenseTrackerEntity(
@@ -178,8 +170,6 @@ async def async_setup_entry(
         if new_entities:
             _LOGGER.debug("Adding %d new device tracker entities", len(new_entities))
             async_add_entities(new_entities)
-
-        first_check = False
 
     entry.async_on_unload(coordinator.async_add_listener(_async_check_devices))
 
@@ -194,14 +184,14 @@ class OPNsenseDeviceScanner(DeviceScanner):
         mac_addresses: list[str] | None = None,
     ) -> None:
         """Initialize the scanner."""
-        self.last_results: dict[str, Any] = {}
+        self.last_results: DeviceDetailsByMAC = {}
         self.client = client
         self.interfaces = interfaces
         self.mac_addresses = mac_addresses or []
 
-    def _get_mac_addrs(self, devices: list[DeviceDetails]) -> DeviceDetailsByMAC | dict:
+    def _get_mac_addrs(self, devices: list[DeviceDetails]) -> DeviceDetailsByMAC:
         """Create dict with mac address keys from list of devices."""
-        out_devices = {}
+        out_devices: DeviceDetailsByMAC = {}
         for device in devices:
             mac = device["mac"]
             if self.interfaces and device["intf_description"] not in self.interfaces:
@@ -227,9 +217,13 @@ class OPNsenseDeviceScanner(DeviceScanner):
 
         Return boolean if scanning successful.
         """
-        devices = self.client.get_arp()
-        self.last_results = self._get_mac_addrs(devices)
-        return True
+        try:
+            devices = self.client.get_arp()
+            self.last_results = self._get_mac_addrs(devices)
+            return True
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Failed to update OPNsense device list")
+            return False
 
     def get_extra_attributes(self, device: str) -> dict[Any, Any]:
         """Return the extra attrs of the given device."""
@@ -246,12 +240,12 @@ class OPNsenseTrackerEntity(
 ):
     """Represent a tracked device."""
 
-    _attr_has_entity_name = True
+    _attr_has_entity_name = False
 
     def __init__(
         self,
         coordinator: OPNsenseDataUpdateCoordinator,
-        device: dict[str, Any],
+        device: DeviceDetails,
         tracker_interfaces: list[str],
         tracker_mac_addresses: list[str],
     ) -> None:
@@ -259,7 +253,6 @@ class OPNsenseTrackerEntity(
         super().__init__(coordinator)
         self._device = device
         self._mac = device["mac"]
-        self._config_entry_id = coordinator.config_entry.entry_id
         self._tracker_interfaces = tracker_interfaces
         self._tracker_mac_addresses = tracker_mac_addresses
         self._attr_unique_id = format_mac(self._mac)
@@ -281,46 +274,27 @@ class OPNsenseTrackerEntity(
 
     def _should_track(self) -> bool:
         """Check if device should be tracked based on filters."""
-        tracker_interfaces = self._tracker_interfaces
-        tracker_mac_addresses = self._tracker_mac_addresses
-
-        if self._config_entry_id and self.hass.data.get(OPNSENSE_DATA, {}).get(
-            self._config_entry_id
-        ):
-            data = self.hass.data[OPNSENSE_DATA][self._config_entry_id]
-            tracker_interfaces = data.get(CONF_TRACKER_INTERFACES, [])
-            tracker_mac_addresses = data.get(CONF_TRACKER_MAC_ADDRESSES, [])
-
-        if tracker_interfaces:
-            if self._device.get("intf_description") not in tracker_interfaces:
+        if self._tracker_interfaces:
+            if self._device.get("intf_description") not in self._tracker_interfaces:
                 return False
-        if tracker_mac_addresses:
-            if self._mac not in tracker_mac_addresses:
+        if self._tracker_mac_addresses:
+            if self._mac not in self._tracker_mac_addresses:
                 return False
         return True
 
     @property
     def is_connected(self) -> bool:
         """Return true if the device is connected to the network."""
-        if not self._should_track():
-            return False
-        # Check if device is in current coordinator data
-        for device in self.coordinator.data:
-            if device["mac"] == self._mac:
-                return True
-        return False
+        return self._mac in self.coordinator.data
 
     @property
-    def source_type(self) -> str:
+    def source_type(self) -> SourceType:
         """Return the source type."""
-        return "router"
+        return SourceType.ROUTER
 
     @callback
     def find_device_entry(self) -> None:
-        """Return device entry.
-
-        Override to prevent automatic linking to existing device registry entries.
-        """
+        """Prevent automatic linking to existing device registry entries."""
         return
 
     @property
@@ -342,18 +316,15 @@ class OPNsenseTrackerEntity(
 
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-        for device in self.coordinator.data:
-            if device["mac"] == self._mac:
-                self._device = device
-                hostname = device.get("hostname")
-                if hostname and hostname.strip():
-                    self._attr_name = hostname.strip()
-                    self._attr_hostname = hostname.strip()
-                else:
-                    if not self._attr_name or self._attr_name == "Unknown":
-                        self._attr_name = format_mac(self._mac)
-                    self._attr_hostname = None
-                if device.get("ip"):
-                    self._attr_ip_address = device["ip"]
-                break
+        device = self.coordinator.data.get(self._mac)
+        if device is not None:
+            self._device = device
+            hostname = device.get("hostname")
+            if hostname and hostname.strip():
+                self._attr_name = hostname.strip()
+                self._attr_hostname = hostname.strip()
+            else:
+                self._attr_hostname = None
+            if device.get("ip"):
+                self._attr_ip_address = device["ip"]
         self.async_write_ha_state()

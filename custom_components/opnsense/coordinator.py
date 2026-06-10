@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
 
 
-class OPNsenseDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
+class OPNsenseDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     """Class to manage fetching OPNsense data."""
 
     def __init__(
@@ -40,10 +40,10 @@ class OPNsenseDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]])
         )
         self.client = client
 
-    async def _async_update_data(self) -> list[dict[str, Any]]:
+    async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         """Update data via library."""
         try:
             data = await self.hass.async_add_executor_job(self.client.get_arp)
-            return data
+            return {device["mac"]: device for device in data}
         except APIException as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err

@@ -40,6 +40,9 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Optional(CONF_TRACKER_INTERFACES, default=[]): vol.All(
                     cv.ensure_list, [cv.string]
                 ),
+                vol.Optional(CONF_TRACKER_MAC_ADDRESSES, default=[]): vol.All(
+                    cv.ensure_list, [cv.string]
+                ),
             }
         )
     },
@@ -73,7 +76,11 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
         netinsight_client = diagnostics.NetworkInsightClient(
             api_key, api_secret, url, verify_ssl, timeout=20
         )
-        interfaces = list(netinsight_client.get_interfaces().values())
+        try:
+            interfaces = list(netinsight_client.get_interfaces().values())
+        except APIException:
+            _LOGGER.exception("Failure fetching OPNsense interfaces")
+            return False
         for interface in tracker_interfaces:
             if interface not in interfaces:
                 _LOGGER.error(
@@ -87,7 +94,7 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
         CONF_TRACKER_MAC_ADDRESSES: [],
     }
 
-    load_platform(hass, Platform.DEVICE_TRACKER, DOMAIN, tracker_interfaces, config)
+    load_platform(hass, Platform.DEVICE_TRACKER, DOMAIN, {}, config)
     return True
 
 

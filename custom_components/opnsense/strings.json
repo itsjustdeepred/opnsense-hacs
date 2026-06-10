@@ -43,8 +43,20 @@
         "title": "Select devices"
       },
       "reconfigure": {
-        "description": "Reconfigure OPNsense integration settings",
-        "title": "Reconfigure OPNsense"
+        "description": "Update your OPNsense connection details.",
+        "title": "Reconfigure OPNsense",
+        "data": {
+          "api_key": "API Key",
+          "api_secret": "API Secret",
+          "url": "OPNsense URL",
+          "verify_ssl": "Verify SSL certificate"
+        },
+        "data_description": {
+          "api_key": "API key from your OPNsense router",
+          "api_secret": "API secret from your OPNsense router",
+          "url": "URL of your OPNsense instance",
+          "verify_ssl": "Enable to verify SSL certificates. Disable if using self-signed certificates."
+        }
       },
       "reconfigure_interfaces": {
         "data": {
