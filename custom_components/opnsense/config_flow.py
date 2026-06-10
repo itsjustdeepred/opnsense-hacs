@@ -320,40 +320,48 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle reconfiguration of the integration."""
+        """Handle reconfiguration of the integration.
+
+        On first call (user_input=None) try existing credentials automatically
+        and skip directly to interface/device selection.  Only show the
+        credential form if the automatic attempt fails or the user submitted
+        new credentials that need to be validated.
+        """
         reconfigure_entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
 
-        if user_input is not None:
-            try:
-                info = await validate_input(self.hass, user_input)
-            except APIException as err:
-                _LOGGER.debug("API exception during reconfigure validation: %s", err)
-                errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception("Unexpected exception during reconfigure")
-                errors["base"] = "unknown"
-            else:
-                self._interfaces = info["interfaces"]
-                working_url = user_input[CONF_URL]
-                self._interface_client = diagnostics.InterfaceClient(
-                    user_input[CONF_API_KEY],
-                    user_input[CONF_API_SECRET],
-                    working_url,
-                    user_input.get(CONF_VERIFY_SSL, False),
-                    timeout=20,
-                )
-                self._user_input = {**user_input, CONF_URL: working_url}
-                try:
-                    devices = await self.hass.async_add_executor_job(
-                        self._interface_client.get_arp
-                    )
-                    self._devices = devices
-                except APIException:
-                    errors["base"] = "cannot_fetch_devices"
-                else:
-                    return await self.async_step_reconfigure_interfaces()
+        credentials = user_input if user_input is not None else dict(reconfigure_entry.data)
 
+        try:
+            info = await validate_input(self.hass, credentials)
+        except APIException as err:
+            _LOGGER.debug("API exception during reconfigure validation: %s", err)
+            errors["base"] = "cannot_connect"
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Unexpected exception during reconfigure")
+            errors["base"] = "unknown"
+        else:
+            self._interfaces = info["interfaces"]
+            working_url = credentials[CONF_URL]
+            self._interface_client = diagnostics.InterfaceClient(
+                credentials[CONF_API_KEY],
+                credentials[CONF_API_SECRET],
+                working_url,
+                credentials.get(CONF_VERIFY_SSL, False),
+                timeout=20,
+            )
+            self._user_input = {**credentials, CONF_URL: working_url}
+            try:
+                devices = await self.hass.async_add_executor_job(
+                    self._interface_client.get_arp
+                )
+                self._devices = devices
+            except APIException:
+                errors["base"] = "cannot_fetch_devices"
+            else:
+                return await self.async_step_reconfigure_interfaces()
+
+        # Show credential form only when connection failed
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=_connection_schema(
