@@ -77,10 +77,7 @@ async def async_setup_entry(
             "device_tracker", DOMAIN, unique_id
         ):
             entity_entry = entity_registry.async_get(deleted_entity_id)
-            if entity_entry and (
-                entity_entry.config_entry_id != entry.entry_id
-                or entity_entry.disabled_by is not None
-            ):
+            if entity_entry and entity_entry.config_entry_id != entry.entry_id:
                 _LOGGER.debug(
                     "Removing orphaned entity %s before recreating",
                     deleted_entity_id,
@@ -151,10 +148,7 @@ async def async_setup_entry(
                     "device_tracker", DOMAIN, unique_id
                 ):
                     entity_entry = current_entity_registry.async_get(deleted_entity_id)
-                    if entity_entry and (
-                        entity_entry.config_entry_id != entry.entry_id
-                        or entity_entry.disabled_by is not None
-                    ):
+                    if entity_entry and entity_entry.config_entry_id != entry.entry_id:
                         _LOGGER.debug(
                             "Removing orphaned entity %s before recreating",
                             deleted_entity_id,
@@ -275,7 +269,10 @@ class OPNsenseTrackerEntity(
     def _should_track(self) -> bool:
         """Check if device should be tracked based on filters."""
         if self._tracker_interfaces:
-            if self._device.get("intf_description") not in self._tracker_interfaces:
+            intf = self._device.get("intf_description")
+            # When intf is None the device is offline and its last interface is
+            # unknown; don't filter it out so it keeps showing as "not_home".
+            if intf is not None and intf not in self._tracker_interfaces:
                 return False
         if self._tracker_mac_addresses:
             if self._mac not in self._tracker_mac_addresses:
