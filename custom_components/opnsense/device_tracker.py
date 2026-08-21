@@ -28,6 +28,7 @@ from .const import (
     CONF_TRACKER_MAC_ADDRESSES,
     DOMAIN,
     OPNSENSE_DATA,
+    OPNSENSE_LEGACY_ENTRY,
 )
 from .coordinator import OPNsenseDataUpdateCoordinator
 
@@ -39,12 +40,13 @@ async def async_get_scanner(
     hass: HomeAssistant, config: ConfigType
 ) -> DeviceScanner | None:
     """Configure the OPNsense device_tracker (legacy YAML)."""
-    if OPNSENSE_DATA not in hass.data:
+    legacy_data = hass.data.get(OPNSENSE_DATA, {}).get(OPNSENSE_LEGACY_ENTRY)
+    if not legacy_data:
         return None
     return OPNsenseDeviceScanner(
-        hass.data[OPNSENSE_DATA][CONF_INTERFACE_CLIENT],
-        hass.data[OPNSENSE_DATA][CONF_TRACKER_INTERFACES],
-        hass.data[OPNSENSE_DATA].get(CONF_TRACKER_MAC_ADDRESSES, []),
+        legacy_data[CONF_INTERFACE_CLIENT],
+        legacy_data[CONF_TRACKER_INTERFACES],
+        legacy_data.get(CONF_TRACKER_MAC_ADDRESSES, []),
     )
 
 
@@ -188,7 +190,10 @@ class OPNsenseDeviceScanner(DeviceScanner):
         out_devices: DeviceDetailsByMAC = {}
         for device in devices:
             mac = device["mac"]
-            if self.interfaces and device["intf_description"] not in self.interfaces:
+            if (
+                self.interfaces
+                and device.get("intf_description") not in self.interfaces
+            ):
                 continue
             if self.mac_addresses and mac not in self.mac_addresses:
                 continue

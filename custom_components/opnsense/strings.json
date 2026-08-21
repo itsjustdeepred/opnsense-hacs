@@ -73,6 +73,16 @@
         "title": "Reconfigure devices"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "description": "Configure how often the integration polls OPNsense for connected devices.",
+        "data": {
+          "scan_interval": "Scan interval (seconds)"
+        }
+      }
+    }
   }
 }
 

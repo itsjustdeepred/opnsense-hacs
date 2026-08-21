@@ -7,14 +7,22 @@ from typing import Any
 
 from pyopnsense import diagnostics
 from pyopnsense.exceptions import APIException
+import requests
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_API_KEY, CONF_URL, CONF_VERIFY_SSL
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.selector import (
     BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -25,9 +33,13 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_API_SECRET,
+    CONF_SCAN_INTERVAL,
     CONF_TRACKER_INTERFACES,
     CONF_TRACKER_MAC_ADDRESSES,
+    DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MAX_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -81,7 +93,17 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
                 "title": f"OPNsense {test_url}",
                 "interfaces": dict(interfaces),
             }
-        except Exception as err:  # noqa: BLE001
+        except APIException:
+            # The server responded, so this scheme/URL is reachable and the
+            # failure is due to credentials or the API itself. Retrying
+            # another scheme would just resend the same credentials over a
+            # different (possibly unencrypted) connection without fixing
+            # anything, so surface this error immediately instead.
+            raise
+        except requests.exceptions.RequestException as err:
+            # Connection-level failure (refused, DNS, SSL, timeout): the
+            # scheme/URL itself might be wrong, so it's worth trying the
+            # next candidate.
             last_error = err
             continue
 
@@ -133,6 +155,49 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
         self._interface_client: diagnostics.InterfaceClient | None = None
         self._user_input: dict[str, Any] = {}
         self._selected_interfaces: list[str] = []
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: ConfigEntry,
+    ) -> OPNsenseOptionsFlowHandler:
+        """Create the options flow."""
+        return OPNsenseOptionsFlowHandler(config_entry)
+
+    def _interface_select_options(self) -> list[SelectOptionDict]:
+        """Build select options from the currently known interfaces."""
+        interface_options = {
+            description: f"{description} ({name})"
+            if name != description
+            else description
+            for name, description in self._interfaces.items()
+        }
+        return [
+            SelectOptionDict(value=key, label=label)
+            for key, label in interface_options.items()
+        ]
+
+    def _device_options(self, extra_macs: list[str] | None = None) -> dict[str, str]:
+        """Build a mapping of MAC address to a human readable label.
+
+        `extra_macs` are MAC addresses that should remain selectable even if
+        they weren't seen in the current ARP scan (e.g. a previously tracked
+        device that is temporarily offline), so reconfiguring doesn't
+        silently drop them from the tracked set.
+        """
+        device_options: dict[str, str] = {}
+        for device in self._devices:
+            mac = device["mac"]
+            hostname = device.get("hostname") or "Unknown"
+            ip = device.get("ip", "Unknown")
+            interface = device.get("intf_description", "Unknown")
+            if not self._selected_interfaces or interface in self._selected_interfaces:
+                device_options[mac] = f"{mac} - {hostname} ({ip}) - {interface}"
+
+        for mac in extra_macs or []:
+            device_options.setdefault(mac, f"{mac} - (currently offline)")
+
+        return device_options
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -196,23 +261,11 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._selected_interfaces = selected_interfaces
                 return await self.async_step_devices()
 
-        interface_options = {
-            description: f"{description} ({name})"
-            if name != description
-            else description
-            for name, description in self._interfaces.items()
-        }
-
-        interface_select_options = [
-            SelectOptionDict(value=key, label=label)
-            for key, label in interface_options.items()
-        ]
-
         data_schema = vol.Schema(
             {
                 vol.Optional(CONF_TRACKER_INTERFACES, default=[]): SelectSelector(
                     SelectSelectorConfig(
-                        options=interface_select_options,
+                        options=self._interface_select_options(),
                         multiple=True,
                         translation_key="tracker_interfaces",
                         mode="list",
@@ -235,13 +288,13 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Handle device MAC address selection step."""
         errors: dict[str, str] = {}
+        device_options = self._device_options()
 
         if user_input is not None:
             selected_macs = user_input.get(CONF_TRACKER_MAC_ADDRESSES, [])
-            available_macs = {device["mac"] for device in self._devices}
             if selected_macs:
                 for mac in selected_macs:
-                    if mac not in available_macs:
+                    if mac not in device_options:
                         errors["base"] = "invalid_mac"
                         break
 
@@ -263,20 +316,6 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
                     data=data,
                 )
 
-        device_options = {}
-        for device in self._devices:
-            mac = device["mac"]
-            hostname = device.get("hostname") or "Unknown"
-            ip = device.get("ip", "Unknown")
-            interface = device.get("intf_description", "Unknown")
-            if not self._selected_interfaces or interface in self._selected_interfaces:
-                device_options[mac] = f"{mac} - {hostname} ({ip}) - {interface}"
-
-        device_select_options = [
-            SelectOptionDict(value=mac, label=label)
-            for mac, label in device_options.items()
-        ]
-
         if not device_options:
             data = {
                 CONF_URL: self._user_input[CONF_URL],
@@ -294,6 +333,11 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
                 title=f"OPNsense {self._user_input[CONF_URL]}",
                 data=data,
             )
+
+        device_select_options = [
+            SelectOptionDict(value=mac, label=label)
+            for mac, label in device_options.items()
+        ]
 
         data_schema = vol.Schema(
             {
@@ -393,25 +437,13 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._selected_interfaces = selected_interfaces
                 return await self.async_step_reconfigure_devices()
 
-        interface_options = {
-            description: f"{description} ({name})"
-            if name != description
-            else description
-            for name, description in self._interfaces.items()
-        }
-
-        interface_select_options = [
-            SelectOptionDict(value=key, label=label)
-            for key, label in interface_options.items()
-        ]
-
         data_schema = vol.Schema(
             {
                 vol.Optional(
                     CONF_TRACKER_INTERFACES, default=existing_interfaces
                 ): SelectSelector(
                     SelectSelectorConfig(
-                        options=interface_select_options,
+                        options=self._interface_select_options(),
                         multiple=True,
                         translation_key="tracker_interfaces",
                         mode="list",
@@ -438,45 +470,31 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
         existing_mac_addresses = reconfigure_entry.data.get(
             CONF_TRACKER_MAC_ADDRESSES, []
         )
+        # Previously tracked MACs stay selectable even if currently offline,
+        # so reconfiguring never silently un-tracks a device that's simply
+        # not on the network right now.
+        device_options = self._device_options(extra_macs=existing_mac_addresses)
 
         if user_input is not None:
             selected_macs = user_input.get(CONF_TRACKER_MAC_ADDRESSES, [])
-            available_macs = {device["mac"] for device in self._devices}
-            invalid_macs = [mac for mac in selected_macs if mac not in available_macs]
+            if selected_macs:
+                for mac in selected_macs:
+                    if mac not in device_options:
+                        errors["base"] = "invalid_mac"
+                        break
 
-            if invalid_macs:
-                selected_macs = [mac for mac in selected_macs if mac in available_macs]
-                _LOGGER.warning(
-                    "Some selected MAC addresses are no longer available and were removed: %s",
-                    ", ".join(invalid_macs),
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    reconfigure_entry,
+                    data_updates={
+                        CONF_URL: self._user_input[CONF_URL],
+                        CONF_API_KEY: self._user_input[CONF_API_KEY],
+                        CONF_API_SECRET: self._user_input[CONF_API_SECRET],
+                        CONF_VERIFY_SSL: self._user_input.get(CONF_VERIFY_SSL, False),
+                        CONF_TRACKER_INTERFACES: self._selected_interfaces,
+                        CONF_TRACKER_MAC_ADDRESSES: selected_macs,
+                    },
                 )
-
-            return self.async_update_reload_and_abort(
-                reconfigure_entry,
-                data_updates={
-                    CONF_URL: self._user_input[CONF_URL],
-                    CONF_API_KEY: self._user_input[CONF_API_KEY],
-                    CONF_API_SECRET: self._user_input[CONF_API_SECRET],
-                    CONF_VERIFY_SSL: self._user_input.get(CONF_VERIFY_SSL, False),
-                    CONF_TRACKER_INTERFACES: self._selected_interfaces,
-                    CONF_TRACKER_MAC_ADDRESSES: selected_macs,
-                },
-            )
-
-        device_options: dict[str, str] = {}
-        available_macs: set[str] = set()
-        for device in self._devices:
-            mac = device["mac"]
-            hostname = device.get("hostname") or "Unknown"
-            ip = device.get("ip", "Unknown")
-            interface = device.get("intf_description", "Unknown")
-            if not self._selected_interfaces or interface in self._selected_interfaces:
-                device_options[mac] = f"{mac} - {hostname} ({ip}) - {interface}"
-                available_macs.add(mac)
-
-        valid_existing_macs = [
-            mac for mac in existing_mac_addresses if mac in available_macs
-        ]
 
         device_select_options = [
             SelectOptionDict(value=mac, label=label)
@@ -486,7 +504,7 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
         data_schema = vol.Schema(
             {
                 vol.Optional(
-                    CONF_TRACKER_MAC_ADDRESSES, default=valid_existing_macs
+                    CONF_TRACKER_MAC_ADDRESSES, default=existing_mac_addresses
                 ): SelectSelector(
                     SelectSelectorConfig(
                         options=device_select_options,
@@ -506,3 +524,40 @@ class OPNsenseConfigFlow(ConfigFlow, domain=DOMAIN):
             },
             errors=errors,
         )
+
+
+class OPNsenseOptionsFlowHandler(OptionsFlow):
+    """Handle OPNsense options."""
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        """Initialize options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current_scan_interval = self.config_entry.options.get(
+            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+        )
+
+        data_schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SCAN_INTERVAL, default=current_scan_interval
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=MIN_SCAN_INTERVAL,
+                        max=MAX_SCAN_INTERVAL,
+                        step=5,
+                        mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="s",
+                    )
+                ),
+            }
+        )
+
+        return self.async_show_form(step_id="init", data_schema=data_schema)
