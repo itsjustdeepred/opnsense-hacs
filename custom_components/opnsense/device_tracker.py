@@ -20,8 +20,6 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-_LOGGER = logging.getLogger(__name__)
-
 from .const import (
     CONF_INTERFACE_CLIENT,
     CONF_TRACKER_INTERFACES,
@@ -30,7 +28,9 @@ from .const import (
     OPNSENSE_DATA,
     OPNSENSE_LEGACY_ENTRY,
 )
-from .coordinator import OPNsenseDataUpdateCoordinator
+from .coordinator import OPNsenseDataUpdateCoordinator, devices_by_mac
+
+_LOGGER = logging.getLogger(__name__)
 
 DeviceDetails: TypeAlias = dict[str, Any]
 DeviceDetailsByMAC: TypeAlias = dict[str, DeviceDetails]
@@ -73,7 +73,7 @@ async def async_setup_entry(
             continue
         if tracker_mac_addresses and mac not in tracker_mac_addresses:
             continue
-        unique_id = format_mac(mac)
+        unique_id = mac
         devices_in_data[unique_id] = device
         if deleted_entity_id := entity_registry.async_get_entity_id(
             "device_tracker", DOMAIN, unique_id
@@ -101,7 +101,17 @@ async def async_setup_entry(
         if entity_entry.unique_id not in devices_in_data:
             # unique_id is already in format_mac format (lowercase colon-separated)
             mac_formatted = entity_entry.unique_id
-            if tracker_mac_addresses and mac_formatted not in tracker_mac_addresses:
+            if (
+                tracker_mac_addresses and mac_formatted not in tracker_mac_addresses
+            ) or mac_formatted in coordinator.data:
+                # Excluded by the current filters (either not a tracked MAC,
+                # or online right now on a non-tracked interface): drop the
+                # stale entity instead of leaving it unavailable forever.
+                _LOGGER.debug(
+                    "Removing entity %s excluded by the current filters",
+                    entity_entry.entity_id,
+                )
+                entity_registry.async_remove(entity_entry.entity_id)
                 continue
             device_data: DeviceDetails = {
                 "mac": mac_formatted,
@@ -123,7 +133,7 @@ async def async_setup_entry(
     def _async_check_devices() -> None:
         """Check for new devices and add tracker entities."""
         valid_macs = {
-            format_mac(mac)
+            mac
             for mac, device in coordinator.data.items()
             if (
                 not tracker_interfaces
@@ -143,8 +153,7 @@ async def async_setup_entry(
 
         new_macs = valid_macs - existing_unique_ids
         new_entities = []
-        for mac, device in coordinator.data.items():
-            unique_id = format_mac(mac)
+        for unique_id, device in coordinator.data.items():
             if unique_id in new_macs:
                 if deleted_entity_id := current_entity_registry.async_get_entity_id(
                     "device_tracker", DOMAIN, unique_id
@@ -183,13 +192,12 @@ class OPNsenseDeviceScanner(DeviceScanner):
         self.last_results: DeviceDetailsByMAC = {}
         self.client = client
         self.interfaces = interfaces
-        self.mac_addresses = mac_addresses or []
+        self.mac_addresses = [format_mac(mac) for mac in mac_addresses or []]
 
     def _get_mac_addrs(self, devices: list[DeviceDetails]) -> DeviceDetailsByMAC:
         """Create dict with mac address keys from list of devices."""
         out_devices: DeviceDetailsByMAC = {}
-        for device in devices:
-            mac = device["mac"]
+        for mac, device in devices_by_mac(devices).items():
             if (
                 self.interfaces
                 and device.get("intf_description") not in self.interfaces
@@ -251,15 +259,15 @@ class OPNsenseTrackerEntity(
         """Initialize the tracker entity."""
         super().__init__(coordinator)
         self._device = device
-        self._mac = device["mac"]
+        self._mac = format_mac(device["mac"])
         self._tracker_interfaces = tracker_interfaces
         self._tracker_mac_addresses = tracker_mac_addresses
-        self._attr_unique_id = format_mac(self._mac)
+        self._attr_unique_id = self._mac
         hostname = device.get("hostname")
         if hostname and hostname.strip():
             self._attr_name = hostname.strip()
         else:
-            self._attr_name = format_mac(self._mac)
+            self._attr_name = self._mac
         self._attr_hostname = (
             hostname.strip() if hostname and hostname.strip() else None
         )

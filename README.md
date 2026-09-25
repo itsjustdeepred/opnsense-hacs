@@ -26,7 +26,7 @@ Enhanced OPNsense integration for Home Assistant with GUI-based configuration fl
 - **Reconfiguration**: Update interface and device selections without removing and re-adding the integration
 - **Automatic Entity Management**: Entities are automatically added or removed based on your selections
 - **Real-time Updates**: Uses a data coordinator for efficient polling and updates
-- **URL Normalization**: Automatically handles URL formatting (adds `/api` if missing, tries HTTPS then HTTP)
+- **URL Normalization**: Automatically handles URL formatting (adds `/api` if missing, defaults to HTTPS when no scheme is given)
 
 ## Installation
 
@@ -84,7 +84,7 @@ The `api_key` and `api_secret` values are acquired from your OPNsense router usi
    - Enter your OPNsense URL (e.g., `https://192.168.1.1` or just `192.168.1.1`)
    - Enter your API key and secret
    - Optionally enable SSL verification
-   - The integration will automatically try HTTPS first, then HTTP if needed
+   - HTTPS is used when no scheme is given; type `http://` explicitly if your router only serves plain HTTP
    - The URL will be normalized to include `/api` if missing
 
 3. **Select Interfaces**:
@@ -147,7 +147,7 @@ If you don't see user-friendly field labels in the config flow:
 
 ## Requirements
 
-- Home Assistant 2024.1.0 or later
+- Home Assistant 2024.11.0 or later
 - OPNsense router with API access enabled
 - Python package: `pyopnsense==0.4.0` (installed automatically)
 

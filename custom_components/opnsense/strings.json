@@ -6,8 +6,8 @@
       "reconfigure_successful": "Settings updated successfully"
     },
     "error": {
+      "already_configured": "Another OPNsense entry already uses this URL",
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-      "cannot_fetch_devices": "Unable to fetch devices from OPNsense",
       "invalid_interface": "One or more selected interfaces are invalid",
       "invalid_mac": "One or more selected MAC addresses are invalid",
       "unknown": "[%key:common::config_flow::error::unknown%]"
@@ -24,7 +24,7 @@
         "data_description": {
           "api_key": "API key from your OPNsense router",
           "api_secret": "API secret from your OPNsense router",
-          "url": "URL of your OPNsense instance (e.g., https://192.168.1.1 or just 192.168.1.1)",
+          "url": "URL of your OPNsense instance (e.g., https://192.168.1.1 or just 192.168.1.1). HTTPS is used when no scheme is given; type http:// explicitly to use plain HTTP.",
           "verify_ssl": "Enable to verify SSL certificates. Disable if using self-signed certificates."
         }
       },
@@ -54,7 +54,7 @@
         "data_description": {
           "api_key": "API key from your OPNsense router",
           "api_secret": "API secret from your OPNsense router",
-          "url": "URL of your OPNsense instance",
+          "url": "URL of your OPNsense instance. HTTPS is used when no scheme is given.",
           "verify_ssl": "Enable to verify SSL certificates. Disable if using self-signed certificates."
         }
       },
@@ -85,4 +85,3 @@
     }
   }
 }
-

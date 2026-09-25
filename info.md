@@ -25,7 +25,7 @@ For this integration you **must have an OPNsense router** with API access enable
 - **Reconfiguration**: Update interface and device selections without removing and re-adding the integration
 - **Automatic Entity Management**: Entities are automatically added or removed based on your selections
 - **Real-time Updates**: Uses a data coordinator for efficient polling and updates
-- **URL Normalization**: Automatically handles URL formatting (adds `/api` if missing, tries HTTPS then HTTP)
+- **URL Normalization**: Automatically handles URL formatting (adds `/api` if missing, defaults to HTTPS when no scheme is given)
 
 ## Configuration
 
@@ -38,7 +38,7 @@ To add OPNsense to your installation, do the following:
 
   | Parameter | Required | Default Value | Description |
   | --------- | -------- | ------------- | ----------- |
-  | `OPNsense URL` | Yes | None | URL of your OPNsense instance (e.g., `https://192.168.1.1` or just `192.168.1.1`). The integration will automatically try HTTPS first, then HTTP if needed, and add `/api` if missing. |
+  | `OPNsense URL` | Yes | None | URL of your OPNsense instance (e.g., `https://192.168.1.1` or just `192.168.1.1`). HTTPS is used when no scheme is given (type `http://` explicitly for plain HTTP), and `/api` is added if missing. |
   | `API Key` | Yes | None | API key from your OPNsense router. Create it in System → Access → Users → [Your User] → API tab. |
   | `API Secret` | Yes | None | API secret from your OPNsense router. Generated together with the API key. |
   | `Verify SSL` | No | False | Enable to verify SSL certificates. Disable if using self-signed certificates. |
@@ -55,7 +55,7 @@ To add OPNsense to your installation, do the following:
 
 For more information on creating API credentials, refer to the [OPNsense documentation](https://docs.opnsense.org/development/api.html).
 
-Minimum required version of Home Assistant is **2024.1.0**.
+Minimum required version of Home Assistant is **2024.11.0**.
 
 ***
 

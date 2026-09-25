@@ -4,16 +4,17 @@ from __future__ import annotations
 
 from datetime import timedelta
 import logging
-from typing import Any
 
 from pyopnsense import diagnostics
 from pyopnsense.exceptions import APIException
+import requests
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_KEY, CONF_URL, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.discovery import load_platform
 from homeassistant.helpers.typing import ConfigType
 
@@ -65,13 +66,16 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     api_secret = conf[CONF_API_SECRET]
     verify_ssl = conf[CONF_VERIFY_SSL]
     tracker_interfaces = conf[CONF_TRACKER_INTERFACES]
+    tracker_mac_addresses = [
+        format_mac(mac) for mac in conf[CONF_TRACKER_MAC_ADDRESSES]
+    ]
 
     interfaces_client = diagnostics.InterfaceClient(
         api_key, api_secret, url, verify_ssl, timeout=20
     )
     try:
         interfaces_client.get_arp()
-    except APIException:
+    except (APIException, requests.RequestException, ValueError):
         _LOGGER.exception("Failure while connecting to OPNsense API endpoint")
         return False
 
@@ -82,7 +86,7 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
         )
         try:
             interfaces = list(netinsight_client.get_interfaces().values())
-        except APIException:
+        except (APIException, requests.RequestException, ValueError):
             _LOGGER.exception("Failure fetching OPNsense interfaces")
             return False
         for interface in tracker_interfaces:
@@ -96,7 +100,7 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data[OPNSENSE_DATA][OPNSENSE_LEGACY_ENTRY] = {
         CONF_INTERFACE_CLIENT: interfaces_client,
         CONF_TRACKER_INTERFACES: tracker_interfaces,
-        CONF_TRACKER_MAC_ADDRESSES: [],
+        CONF_TRACKER_MAC_ADDRESSES: tracker_mac_addresses,
     }
 
     load_platform(hass, Platform.DEVICE_TRACKER, DOMAIN, {}, config)
@@ -110,7 +114,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api_secret = entry.data[CONF_API_SECRET]
     verify_ssl = entry.data.get(CONF_VERIFY_SSL, False)
     tracker_interfaces = entry.data.get(CONF_TRACKER_INTERFACES, [])
-    tracker_mac_addresses = entry.data.get(CONF_TRACKER_MAC_ADDRESSES, [])
+    tracker_mac_addresses = [
+        format_mac(mac) for mac in entry.data.get(CONF_TRACKER_MAC_ADDRESSES, [])
+    ]
 
     interface_client = diagnostics.InterfaceClient(
         api_key, api_secret, url, verify_ssl, timeout=20
